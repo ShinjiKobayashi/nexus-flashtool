@@ -2,8 +2,10 @@
 Nexus系デバイスにfactry imageをflashするツール
 
 ## Hot to use
+ADBコマンドが利用できる環境であること。
 
 ```
+$ adb reboot bootloader
 $ ./flashtool
 Select your device
 1 ryu
