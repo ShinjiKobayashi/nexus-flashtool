@@ -14,6 +14,8 @@ import (
 	"github.com/mitchellh/ioprogress"
 	"os/exec"
 	"runtime"
+	"crypto/md5"
+	"encoding/hex"
 )
 
 
@@ -41,7 +43,7 @@ func get() {
 }
 
 
-func download(url string) (string, bool){
+func download(url string, md5sum string) (string, bool){
 	response, err := http.Get(url)
 	if err != nil {
 		fmt.Println(err)
@@ -51,7 +53,8 @@ func download(url string) (string, bool){
 	s, _ := strconv.Atoi(response.Header.Get("Content-Length"))
 
 	_, filename := path.Split(strings.Replace(url, "https://", "", 1))
-	file, err := os.Create(filename + ".tmp")
+	tmpfilename := filename + ".tmp"
+	file, err := os.Create(tmpfilename)
 	if err != nil {
 		fmt.Println(err)
 		return "", false
@@ -65,14 +68,35 @@ func download(url string) (string, bool){
 			return fmt.Sprintf("%s %s %20s", filename, bar(progress, total), ioprogress.DrawTextFormatBytes(progress, total))
 		}),
 	}
-	_, e := io.Copy(file, progress)
-	if e != nil {
+
+	if _, e := io.Copy(file, progress); e != nil {
 		fmt.Println(e)
 		return "", false
 	}
-	os.Rename(filename + ".tmp", filename)
 
+	if !checkMd5(tmpfilename, md5sum){
+		return "", false
+	}
+
+	os.Rename(filename + ".tmp", filename)
 	return filename, true
+}
+
+
+func checkMd5(filename string, correct string) bool {
+	in, err := ioutil.ReadFile(filename)
+	if err!=nil {
+		fmt.Println(err)
+		return false
+	}
+
+	hash := md5.New()
+	hash.Write(in)
+	if correct != hex.EncodeToString(hash.Sum(nil)) {
+		fmt.Printf("checksum error")
+		return false
+	}
+	return true
 }
 
 
@@ -142,28 +166,29 @@ func output(r io.Reader){
 	}
 }
 
-func execCmd(cmdString string, params ...string) {
+func execCmd(cmdString string, params ...string) bool {
 	cmd := exec.Command(cmdString, params...)
 	outReader, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Print(err)
-		return
+		return false
 	}
 
 	errReader, err := cmd.StderrPipe()
 	if err != nil {
 		fmt.Print(err)
-		return
+		return false
 	}
 
 	go output(outReader)
 	go output(errReader)
 	if err = cmd.Run(); err != nil {
 		fmt.Print(err)
-		return
+		return false
 	}
-}
 
+	return true
+}
 
 
 func main() {
@@ -184,15 +209,19 @@ func main() {
 	_, versionIndex := getInput("Select the system image version for your device", versions)
 
 	// download target image
-	file, ok := download(devInfos[devIndex].infos[versionIndex].url);
+	file, ok := download(devInfos[devIndex].infos[versionIndex].url, devInfos[devIndex].infos[versionIndex].md5);
 	if !ok {
 		fmt.Print("download error")
 	}
 
 	// uncompress & exec flash-all.sh
 	dirName := "temp"
-	execCmd("mkdir", dirName)
-	execCmd("tar", "xvf", file, "-C", dirName, "--strip-components", "1")
+	if ok :=execCmd("mkdir", dirName); !ok {
+		return
+	}
+	if ok := execCmd("tar", "xvf", file, "-C", dirName, "--strip-components", "1"); !ok{
+		return
+	}
 	os.Chdir(dirName)
 	switch runtime.GOOS {
 	case "windows":
@@ -204,6 +233,10 @@ func main() {
 	default:
 	}
 	os.Chdir("../")
-	execCmd("rm", file)
-	execCmd("rm", "-fr", dirName)
+	if ok := execCmd("rm", file); !ok {
+		return
+	}
+	if ok := execCmd("rm", "-fr", dirName); !ok {
+		return
+	}
 }
